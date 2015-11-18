@@ -1,0 +1,228 @@
+# FEEL FREE TO CHANGE THE CODE. 
+# This is just a dull example
+
+# ------------------------------------------------------------------------------   
+# Start listening and handle incoming connections in board() function
+# ------------------------------------------------------------------------------   
+def start_board():
+  ip = mycontext['ip']
+  port = mycontext['port']
+  print "Listening on IP " + str(ip) +" port " + str(port)
+  try: 
+    listencommhandle = waitforconn(ip,port,board)
+  except Exception, e:
+    print "Exception in start_board: %s, %s\n" %(type(e), e)
+    raise
+    #pass
+
+# ------------------------------------------------------------------------------    
+# Called when an incoming message is received. 
+# ------------------------------------------------------------------------------    
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+   #check if you have leader election
+   if mycontext['leader_election'] == '1':
+     msgheader = sockobj.recv(1024) # Receive message,
+     if msgheader.startswith( 'GET' ):
+       #Send Leader's election in process html
+       htmlresponse = file("leader.html").read()
+       #send back the html to the client
+       sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+       "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+       stopcomm(thiscommhandle)
+       #start leader election by sending your id as leader
+       try:
+         socket_next = openconn(mycontext['next'],mycontext['port'])
+         #the message is tuple
+         #it consists of the leader id , ip , and the status of leder election 1 up , 0 down
+         message = "%s %s %s"%(mycontext['leader'][0],mycontext['ip'], '1')
+         print message
+         socket_next.send(message)
+         socket_next.close()
+       except Exception, e:
+         print "FAIL SECTION 1: %s, %s\n" %(type(e), e)
+     else:
+       #take the contents of the msg and open an socket with next node
+       msg_list = msgheader.split()
+       #print mycontext['id'],mycontext['next'],msg_list
+       #socket_next = openconn(mycontext['next'],63131)
+       socket_next = openconn(mycontext['next'],mycontext['port'])
+       if msg_list[2] == '0':
+         #if the leader election is down(0) then stop the election
+         #and send that information to next node
+         mycontext['leader_election'] =0
+         message ="%s %s %s"%(mycontext['leader'][0], mycontext['leader'][1], '0')
+         socket_next.send(message)
+       elif msg_list[0] > mycontext['leader'][0]:
+         #if the leader id of msg if greater than mine then update 
+         #and send the update to next node
+         mycontext['leader'][0] = msg_list[0]#leader id
+         mycontext['leader'][1] = msg_list[1]#leader ip 
+         message ="%s %s %s"%(mycontext['leader'][0], mycontext['leader'][1], '1')
+         socket_next.send(message)
+       
+       elif msg_list[0] == mycontext['id']:
+         #if the id of leader is equal to my id
+         #Im the leader, send a message to next node to stop the election, 
+         message ="%s %s %s"%(mycontext['id'], mycontext['ip'], '0')
+         socket_next.send(message)
+       socket_next.close()    
+   else:
+    msgheader = sockobj.recv(1024) # Receive message, 
+    # check if i am the leader
+    if mycontext['leader'][0]==mycontext['id']:
+    # React depending on message type: HTTP GET or POST, or some other type of communication.
+     if msgheader.startswith( 'GET' ):
+       #A GET request: send the html document to client
+       htmlresponse = generate_html_page("")
+       sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+       "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+       stopcomm(thiscommhandle)
+       # A post request. Leader should add the item in its blackboard and send it to other clients   
+     elif msgheader.startswith( 'POST' ):
+       mycontext['lock'].aquire()
+       mycontext['index']=str(int(mycontext['index'])+1)
+       message = "%s"%mycontext['index'] +msgheader[msgheader.index('comment=')+8:] +"<br>"
+       if message.split()[1] == "clear<br>":
+          #if the message is clear, clear the blackboard
+          mycontext['blackboard'] = " " 
+          htmlresponse = generate_html_page('')
+       else:
+          # else append with the rest html document
+          htmlresponse = generate_html_page(message.split()[1])
+       #send back the new html to the client
+       sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+       "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+       stopcomm(thiscommhandle)
+       mycontext['lock'].release()
+       try:
+         #read the list of servers
+         for line in file("servers.txt","r"):
+           #avoid sending the msg to yourself
+           if line.strip() != mycontext['ip']:
+             #try to send the message to other servers
+             socket1 = openconn(line.strip(),int(mycontext['port']))
+             socket1.send(message)
+             socket1.close()
+    else: #The client is not the leader
+      # React depending on message type: HTTP GET or POST, or some other type of communication.
+      if msgheader.startswith( 'GET' ):
+        #A GET request: send the html document to client
+        htmlresponse = generate_html_page("")
+        sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+        "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+        stopcomm(thiscommhandle)
+        except Exception, e:
+            print "Send message fail: %s, %s\n" %(type(e), e)
+      elif msgheader.startswith( 'POST' ):
+        #client got a post request
+        socketle= openconn(mycontext['leader'][1],int(mycontext['port']))
+        socketle.send(msgheader)
+        socketle.close()
+      else:
+        #We receive an message from the leader and we have to post it
+        if msgheader.split()[0] == int(mycontext['index'])+1:
+          mycontext['lock'].aquire()
+          mycontext['index']=str(int(mycontext['index'])+1)
+          htmlresponse=generate_html_page(msgheader.split()[1])
+       #send back the new html to the client
+       sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+       "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+       stopcomm(thiscommhandle)
+       mycontext['lock'].release()
+                    
+  except Exception, e:
+    print "Exception in board: %s, %s\n" %(type(e), e)
+    #let the server continue even if error occured
+    #raise
+    #pass
+    
+# ------------------------------------------------------------------------------
+# Outputs the blackboard html 
+# Optional parameters are message and error which are introduced as headers into the html.
+# ------------------------------------------------------------------------------   
+def generate_html_page(status=""):
+  #Initialize blackboard content
+  
+  #add the msg to the blackboard
+  content ='<div class="entry">%s</div>' %( mycontext['blackboard'] )
+  
+  # dynamic title showing Ip address, port and up time.
+  board_title = '<div id="boardtitle_placeholder" class="boardtitle">Board contents at host: %s:%u, up time: %u sec.</div>' %(mycontext['ip'], mycontext['port'], int(getruntime()))  
+
+  # merging the contents of the board with the title
+  # and wrapping all with <div id="boardcontents_placeholder”>...</div>
+  content = '<div id="boardcontents_placeholder">%s%s</div>' %(board_title, content)   
+
+  # An optional status message
+  status_message = "<div class='status'>%s</div>" % (status)
+
+  # ID of server and Leader ID
+  id_placeholder = '<div id="id_placeholder">Server ID:%s  Leader ID:%s Leader IP:%s Next:%s</div>' %(mycontext['id'],mycontext['leader'][0], mycontext['leader'][1], mycontext['next'])  
+  #Concatenate strings into huge string representing the final html
+  content = "".join([mycontext['headerhtml'], status_message, id_placeholder, content, mycontext['footerhtml']])
+  
+  #print content
+  return content
+  
+# ------------------------------------------------------------------------------    
+# Main entry point of the program. Initalizes global variables in mycontext
+# and calls start_board() which opens the socket for incoming connections.
+# ------------------------------------------------------------------------------
+if callfunc == 'initialize':
+  # Running remotely (assuming that we pass one input argument only when we run remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  if len(callargs) == 1:
+    port = int(callargs[0])
+    ip = getmyip()
+
+  # To run locally: use the loopback ip address (127.0.0.1) and a port in the range 63100 .. 63110
+  # If you start multiple local instances using different ports, you can debug and test your code locally
+  # example:
+  # python ../demokit/repy.py ../demokit/restrictions.default skeleton2015advanced.repy 127.0.0.1 63100
+  elif len(callargs) == 2:
+    port = int(callargs[1])
+    ip = callargs[0]
+  
+  # Fail if we don't have 1 or 2 arguments  
+  else:
+    raise Exception("Specify a port only for auto detection of IP, or specify IP and port")
+
+  #Initialize Port and IP
+  mycontext['port'] = port
+  mycontext['ip'] = ip
+  
+  #read header and footer html files
+  mycontext['headerhtml'] = file("header.html").read()
+  mycontext['footerhtml'] = file("footer.html").read()
+  #blackboard variable holds all the messages
+  mycontext['blackboard'] = " "
+  mycontext['next'] = ""
+  mycontext['id'] = str(int(100 * randomfloat() ))
+  #leader is a tuple, has 2 values id and ip
+  mycontext['leader'] = [mycontext['id'],mycontext['ip']]
+  mycontext['lock'] = getlock()
+  mycontext['leader_election'] = '1'
+  mycontext['index']=0
+  #Start leader election
+  #a) find your neighbor
+  server_lis = []
+  #read the servers file
+  for line in file("servers.txt","r"):
+    server_lis.append(line.strip())
+  #find your neighbor
+  for server in range(len(server_lis)):
+    if mycontext['ip'] == server_lis[server]:
+      mycontext['next'] = server_lis[(server+1)%len(server_lis)]
+  #your neighbor is the next one in the list 
+  #(round up by modulo) so the last one refers to 1st
+  #start the board for listening 
+  start_board()
+  #start leader election by sending your id as leader
+  #socket_next = openconn(mycontext['next'],63131)
+  #socket_next = openconn('127.0.0.1',int(mycontext['next']))
+  #the message is tuple
+  #it consists of the leader id , ip , and the status of leder election 1 up , 0 down
+  #message = "%d %s %d"%(mycontext['id'],mycontext['ip'], mycontext['leader_election'])
+  #socket_next.send(message)
+  #socket_next.close()
